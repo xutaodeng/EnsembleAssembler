@@ -1,0 +1,10 @@
+PE=260 30 /mnt/cluster2/xdeng/tools/ensembleAssembly_1/example_data/test1.fastq /mnt/cluster2/xdeng/tools/ensembleAssembly_1/example_data/test2.fastq
+#SE=/mnt/cluster2/xdeng/tools/ensembleAssembly_1/example_data/test2.fastq
+NUM_THREADS= 8
+SOAP_KMER=31
+ABYSS_KMER = 31
+METAVELVET_KMER=31
+CON_LEN_DBG=150
+CON_LEN_OLC=300
+#ASSEMBLY_MODE=optimal
+ASSEMBLY_MODE=quick 

@@ -1,0 +1,565 @@
+#!/usr/bin/make -rRf
+# Run the ABySS assembler.
+# Written by Shaun Jackman <sjackman@bcgsc.ca>.
+
+# Set pipefail to require that all commands of a pipe must succeed.
+SHELL=/bin/bash -o pipefail
+
+# Define this environment variable on Mac OS X to read
+# compressed files.
+export DYLD_FORCE_FLAT_NAMESPACE=1
+
+# Integrate with Sun Grid Engine (SGE)
+ifdef JOB_NAME
+name?=$(JOB_NAME)
+endif
+ifdef SGE_TASK_ID
+k?=$(SGE_TASK_ID)
+endif
+ifdef NSLOTS
+ifneq ($(NSLOTS), 1)
+np?=$(NSLOTS)
+endif
+endif
+
+# Integrate with Portable Batch System (PBS)
+ifdef PBS_JOBNAME
+name?=$(PBS_JOBNAME)
+endif
+ifdef PBS_ARRAYID
+k?=$(PBS_ARRAYID)
+endif
+ifdef PBS_NODEFILE
+NSLOTS=$(shell wc -l <$(PBS_NODEFILE))
+ifneq ($(NSLOTS), 1)
+np?=$(NSLOTS)
+endif
+endif
+
+# Integrate with Load Sharing Facility (LSF)
+ifdef LSB_JOBNAME
+name?=$(LSB_JOBNAME)
+endif
+ifdef LSB_JOBINDEX
+k?=$(LSB_JOBINDEX)
+endif
+ifdef LSB_DJOB_NUMPROC
+ifneq ($(LSB_DJOB_NUMPROC), 1)
+np?=$(LSB_DJOB_NUMPROC)
+endif
+endif
+ifdef LSF_BINDIR
+mpirun?=$(LSF_BINDIR)/mpirun.lsf
+endif
+
+# Integrate with IBM LoadLeveler
+ifdef LOADL_JOB_NAME
+name?=$(LOADL_JOB_NAME)
+endif
+ifdef LOADL_STEP_ID
+k?=$(LOADL_STEP_ID)
+endif
+ifdef LOADL_HOSTFILE
+NSLOTS=$(shell wc -l <$(LOADL_HOSTFILE))
+ifneq ($(NSLOTS), 1)
+np?=$(NSLOTS)
+endif
+endif
+
+# Integrate with SLURM
+ifdef SLURM_JOB_NAME
+name?=$(SLURM_JOB_NAME)
+endif
+ifdef SLURM_JOBID
+k?=$(SLURM_JOBID)
+endif
+ifdef SLURM_NTASKS
+np?=$(SLURM_NTASKS)
+endif
+
+# Determine the path to mpirun
+mpirun?=$(shell which mpirun)
+ifeq ($(mpirun),)
+mpirun=mpirun
+endif
+
+# Determine the path to the ABySS executables
+path?=$(shell if ! which ABYSS >/dev/null 2>/dev/null; then \
+	dirname $(MAKEFILE_LIST); fi)
+ifdef path
+PATH:=$(path):$(PATH)
+endif
+
+ifdef lib
+map=$(foreach a,$(2),$(call $(1),$(a)))
+deref=$($1)
+in?=$(call map, deref, $(lib))
+else
+ifdef in
+lib?=$(name)
+$(lib)?=$(in)
+endif
+endif
+pe?=$(lib)
+mp?=$(pe)
+
+# Strip spaces from the file paths
+ifdef in
+override in:=$(strip $(in))
+endif
+ifdef se
+override se:=$(strip $(se))
+endif
+
+# ABYSS parameters
+q ?= 3
+abyssopt += -k$k -q$q
+ifdef e
+abyssopt += -e$e
+endif
+ifdef E
+abyssopt += -E$E
+endif
+ifdef t
+abyssopt += -t$t
+endif
+ifdef c
+abyssopt += -c$c
+endif
+ifdef b
+abyssopt += -b$b
+pbopt += -b$b
+endif
+abyssopt += $v --coverage-hist=coverage.hist -s $*-bubbles.fa
+
+# Number of threads
+ifdef PE_HOSTFILE
+hostname?=$(shell hostname -f)
+j?=$(shell awk '$$1 == "$(hostname)" {print $$2}' $(PE_HOSTFILE))
+endif
+ifeq ($j,)
+j:=$(np)
+endif
+ifeq ($j,)
+j:=2
+endif
+
+# AdjList parameters
+m?=50
+
+# PopBubbles parameters
+p?=0.9
+pbopt += -p$p
+
+# Aligner parameters
+aligner?=map
+align?=abyss-$(aligner)
+mapopt=$v -j$j -l$($*_l) $(ALIGNER_OPTIONS) $(MAP_OPTIONS)
+
+# fixmate parameters
+ifeq ($(align),abyss-kaligner)
+fixmate?=ParseAligns
+else
+fixmate?=abyss-fixmate
+endif
+fmopt=$v -l$($*_l) $(FIXMATE_OPTIONS)
+
+# DistanceEst parameters
+l?=$k
+s?=200
+n?=10
+libs=$(pe) $(mp)
+$(foreach i,$(libs),$(eval $i_l?=$l))
+$(foreach i,$(libs),$(eval $i_s?=$s))
+$(foreach i,$(libs),$(eval $i_n?=$n))
+deopt=$v -j$j -k$k -l$($*_l) -s$($*_s) -n$($*_n) $($*_de) \
+	$(DISTANCEEST_OPTIONS)
+
+# SimpleGraph parameters
+ifdef d
+sgopt += -d$d
+endif
+
+# PathConsensus parameters
+ifdef a
+pcopt += -a$a
+endif
+pcopt += -p$p
+
+# Scaffold parameters
+S?=$s
+N?=$n
+
+# BWA-SW parameters
+bwaswopt=-t$j
+BWASW_OPTIONS='-b9 -q16 -r1 -w500'
+
+# Remove environment variables
+unexport in se $(lib) $(pe) $(mp)
+
+# Check the mandatory parameters
+
+ifndef name
+error::
+	@>&2 echo 'abyss-pe: missing parameter `name`'
+endif
+ifndef k
+error::
+	@>&2 echo 'abyss-pe: missing parameter `k`'
+endif
+ifeq ($(lib)$(in)$(se),)
+error::
+	@>&2 echo 'abyss-pe: missing parameter `lib`, `in` or `se`'
+endif
+
+default:
+
+error::
+	@>&2 echo 'Try `abyss-pe help` for more information.'
+	@false
+
+# Help and version messages
+
+help:
+	@printf '\
+Usage: abyss-pe [OPTION]... [PARAMETER=VALUE]... [COMMAND]...\n\
+Assemble reads into contigs and scaffolds. ABySS is a de novo\n\
+sequence assembler intended for short paired-end reads and large\n\
+genomes. See the abyss-pe man page for documentation of assembly\n\
+parameters and commands. abyss-pe is a Makefile script, and so\n\
+options of `make` may also be used with abyss-pe. See the `make`\n\
+man page for documentation.\n\
+\n\
+Report bugs to <abyss-users@bcgsc.ca>.\n'
+
+version:
+	@printf '\
+abyss-pe (ABySS) 1.3.6\n\
+Written by Shaun Jackman.\n\
+\n\
+Copyright 2012 Canada'\''s Michael Smith Genome Science Centre\n'
+
+versions: version
+	@ABYSS --version; echo
+	@-ABYSS-P --version; echo
+	@AdjList --version; echo
+	@DistanceEst --version; echo
+	@MergeContigs --version; echo
+	@MergePaths --version; echo
+	@Overlap --version; echo
+	@PathConsensus --version; echo
+	@PathOverlap --version; echo
+	@PopBubbles --version; echo
+	@SimpleGraph --version; echo
+	@abyss-fac --version; echo
+	@abyss-filtergraph --version; echo
+	@abyss-fixmate --version; echo
+	@abyss-map --version; echo
+	@abyss-scaffold --version; echo
+	@abyss-todot --version; echo
+	@$(align) --version; echo
+	@awk --version; echo
+	@sort --version; echo
+	@-mpirun --version
+
+# Determine the default target
+default: unitigs
+ifneq ($(in),)
+default: contigs contigs-dot
+endif
+ifneq ($(mp),)
+default: scaffolds scaffolds-dot
+endif
+default: stats
+
+# Define the commands (phony targets)
+unitigs: $(name)-unitigs.fa
+
+unitigs-dot: $(name)-unitigs.dot
+
+pe-index: $(name)-3.fa.fm
+
+pe-sam: $(addsuffix -3.sam.gz, $(pe))
+
+pe-bam: $(addsuffix -3.bam.bai, $(pe))
+
+contigs: $(name)-contigs.fa
+
+contigs-dot: $(name)-contigs.dot
+
+mp-index: $(name)-6.fa.fm
+
+mp-sam: $(addsuffix -6.sam.gz, $(mp))
+
+mp-bam: $(addsuffix -6.bam.bai, $(mp))
+
+scaffolds: $(name)-scaffolds.fa
+
+scaffolds-dot: $(name)-scaffolds.dot
+
+all: default bam stats
+
+clean:
+	rm -f *.adj *.dot *.sam.gz *.hist *.dist *.path *.path[123]
+
+.PHONY: bam default stats \
+	unitigs unitigs-dot \
+	pe-index pe-sam pe-bam contigs contigs-dot \
+	mp-index mp-sam mp-bam scaffolds scaffolds-dot \
+	all clean help version versions
+.DELETE_ON_ERROR:
+.SECONDARY:
+
+# Utilities
+
+%.fa.fm: %.fa
+	abyss-index $v $<
+
+%.bam: %.sam.gz
+	samtools view -Sb $< -o $@
+
+%.bam.bai: %.bam
+	samtools index $<
+
+# Assemble unitigs
+
+%-1.fa:
+ifdef np
+	$(mpirun) -np $(np) ABYSS-P $(abyssopt) $(ABYSS_OPTIONS) -o $@ $(in) $(se)
+else
+	ABYSS $(abyssopt) $(ABYSS_OPTIONS) -o $@ $(in) $(se)
+endif
+
+# Find overlapping contigs
+
+%-1.adj: %-1.fa
+	AdjList $v -k$k -m$m $< >$@
+
+# Remove shim contigs
+
+%-2.adj: %-1.adj
+	abyss-filtergraph $v -k$k -g $@ $^ >$*-1.path
+
+# Pop bubbles
+
+%-2.path %-3.adj: %-1.fa %-2.adj
+	PopBubbles $v -j$j -k$k $(pbopt) $(POPBUBBLES_OPTIONS) -g $*-3.adj $^ >$*-2.path
+
+%-3.fa: %-1.fa %-2.adj %-2.path
+	MergeContigs $v -k$k -o $@ $^
+	awk '!/^>/ {x[">" $$1]=1; next} {getline s} $$1 in x {print $$0 "\n" s}' \
+		$*-2.path $*-1.fa >$*-indel.fa
+
+%-3.dot: %-3.adj
+	abyss-todot $v -k$k $< >$@
+
+%-unitigs.fa: %-3.fa
+	ln -sf $< $@
+
+%-unitigs.dot: %-3.dot
+	ln -sf $< $@
+
+# Estimate distances between unitigs
+
+%-3.sam.gz %-3.hist: $(name)-3.fa
+	$(align) $(mapopt) $(strip $($*)) $< \
+		|$(fixmate) $(fmopt) -h $*-3.hist \
+		|sort -snk3 -k4 \
+		|gzip >$*-3.sam.gz
+
+%-3.bam %-3.hist: $(name)-3.fa
+	$(align) $(mapopt) $(strip $($*)) $< \
+		|$(fixmate) $(fmopt) -h $*-3.hist \
+		|sort -snk3 -k4 \
+		|samtools view -Sb - -o $*-3.bam
+
+%-3.dist: %-3.sam.gz %-3.hist
+	gunzip -c $< \
+	|DistanceEst $(deopt) -o $@ $*-3.hist
+
+%-3.dist: %-3.bam %-3.hist
+	samtools view -h $< \
+	|DistanceEst $(deopt) -o $@ $*-3.hist
+
+%-3.dist: $(name)-3.fa
+	$(align) $(mapopt) $(strip $($*)) $< \
+		|$(fixmate) $(fmopt) -h $*-3.hist \
+		|sort -snk3 -k4 \
+		|DistanceEst $(deopt) -o $@ $*-3.hist
+
+dist=$(addsuffix -3.dist, $(pe))
+
+ifneq ($(name)-3.dist, $(dist))
+$(name)-3.dist: $(name)-3.fa $(dist)
+	abyss-todot $v --dist -e $^ >$@
+
+$(name)-3.bam: $(addsuffix -3.bam, $(pe))
+	samtools merge -r $@ $^
+endif
+
+# Find overlaps between contigs
+
+%-4.fa %-4.adj: %-3.fa %-3.adj %-3.dist
+	Overlap $v $(OVERLAP_OPTIONS) -k$k -g $*-4.adj -o $*-4.fa $^
+
+# Assemble contigs
+
+%-4.path1: %-4.adj %-3.dist
+	SimpleGraph $v $(sgopt) $(SIMPLEGRAPH_OPTIONS) -j$j -k$k -o $@ $^
+
+%-4.path2: %-4.adj %-4.path1
+	MergePaths $v $(MERGEPATHS_OPTIONS) -j$j -k$k -o $@ $^
+
+%-4.path3: %-4.adj %-4.path2
+	PathOverlap --assemble $v -k$k $^ >$@
+
+ifndef cs
+
+%-5.path %-5.fa %-5.adj: %-3.fa %-4.fa %-4.adj %-4.path3
+	cat $(wordlist 1, 2, $^) \
+		|PathConsensus $v -k$k $(pcopt) -o $*-5.path -s $*-5.fa -g $*-5.adj - $(wordlist 3, 4, $^)
+
+%-6.fa: %-3.fa %-4.fa %-5.fa %-5.adj %-5.path
+	cat $(wordlist 1, 3, $^) |MergeContigs $v -k$k -o $@ - $(wordlist 4, 5, $^)
+
+else
+
+%-5.adj %-5.path: %-4.adj %-4.path3
+	ln -sf $*-4.adj $*-5.adj
+	ln -sf $*-4.path3 $*-5.path
+
+%-cs.fa: %-3.fa %-4.fa %-4.adj %-4.path3
+	cat $(wordlist 1, 2, $^) |MergeContigs $v -k$k -o $@ - $(wordlist 3, 4, $^)
+
+# Convert colour-space sequence to nucleotides
+
+%-6.fa: %-cs.fa
+	KAligner $v --seq -m -j$j -l$l $(in) $(se) $< \
+		|Consensus $v -o $@ $<
+
+endif
+
+%-6.dot: %-5.adj %-5.path
+	PathOverlap --overlap $v --dot -k$k $^ >$@
+
+%-contigs.fa: %-6.fa
+	ln -sf $< $@
+
+%-contigs.dot: %-6.dot
+	ln -sf $< $@
+
+# Estimate distances between contigs
+
+%-6.sam.gz %-6.hist: $(name)-6.fa
+	$(align) $(mapopt) $(strip $($*)) $< \
+		|$(fixmate) $(fmopt) -h $*-6.hist \
+		|sort -snk3 -k4 \
+		|gzip >$*-6.sam.gz
+
+%-6.bam %-6.hist: $(name)-6.fa
+	$(align) $(mapopt) $(strip $($*)) $< \
+		|$(fixmate) $(fmopt) -h $*-6.hist \
+		|sort -snk3 -k4 \
+		|samtools view -Sb - -o $*-6.bam
+
+%-6.dist.dot: %-6.sam.gz %-6.hist
+	gunzip -c $< \
+	|DistanceEst --dot $(deopt) -o $@ $*-6.hist
+
+%-6.dist.dot: %-6.bam %-6.hist
+	samtools view -h $< \
+	|DistanceEst --dot $(deopt) -o $@ $*-6.hist
+
+%-6.dist.dot: $(name)-6.fa
+	$(align) $(mapopt) $(strip $($*)) $< \
+		|$(fixmate) $(fmopt) -h $*-6.hist \
+		|sort -snk3 -k4 \
+		|DistanceEst --dot $(deopt) -o $@ $*-6.hist
+
+# Scaffold
+
+%-6.path: $(name)-6.dot $(addsuffix -6.dist.dot, $(mp))
+	abyss-scaffold $v -k$k -s$S -n$N -g $@.dot $(SCAFFOLD_OPTIONS) $^ >$@
+
+%-7.path %-7.adj %-7.fa: %-6.fa %-6.dot %-6.path
+	PathConsensus $v -k$k $(pcopt) -s $*-7.fa -g $*-7.adj -o $*-7.path $^
+
+%-8.fa: %-6.fa %-7.fa %-7.adj %-7.path
+	cat $(wordlist 1, 2, $^) \
+		|MergeContigs $v -k$k -o $*-8.fa - $(wordlist 3, 4, $^)
+
+%-8.dot: %-7.adj %-7.path
+	PathOverlap --overlap $v --dot -k$k $^ >$@
+
+%-scaffolds.fa: %-8.fa
+	ln -sf $< $@
+
+%-scaffolds.dot: %-8.dot
+	ln -sf $< $@
+
+# Create the final BAM file
+
+ifneq ($(mp),)
+bam: $(name)-scaffolds.bam.bai
+else
+ifneq ($(in),)
+bam: $(name)-contigs.bam.bai
+else
+bam: $(name)-unitigs.bam.bai
+endif
+endif
+
+$(name)-unitigs.bam: %.bam: %.fa
+	$(align) $v -j$j -l$l $(ALIGNER_OPTIONS) $(se) $< \
+		|samtools view -Su - |samtools sort -o - - >$@
+
+$(name)-contigs.bam $(name)-scaffolds.bam: %.bam: %.fa
+	$(align) $v -j$j -l$l $(ALIGNER_OPTIONS) \
+		$(call map, deref, $(sort $(lib) $(pe) $(mp))) $< \
+		|$(fixmate) $(fmopt) \
+		|sort -snk3 -k4 \
+		|samtools view -Sb - >$@
+
+# Align the variants to the assembly
+
+%.fa.bwt: %.fa
+	bwa index $<
+
+%-variants.bam: %.fa.bwt
+	bwa bwasw -t$j $*.fa <(cat $(name)-bubbles.fa $(name)-indel.fa) \
+		|samtools view -Su - |samtools sort -o - - >$@
+
+%-variants.vcf.gz: %.fa %-variants.bam
+	samtools mpileup -Buf $^ |bcftools view -vp1 - |bgzip >$@
+
+%.gz.tbi: %.gz
+	tabix -pvcf $<
+
+# Calculate assembly contiguity statistics
+
+stats: $(name)-stats
+
+$(name)-stats: %-stats: %-unitigs.fa
+ifneq ($(in),)
+$(name)-stats: %-stats: %-contigs.fa
+endif
+ifneq ($(mp),)
+$(name)-stats: %-stats: %-scaffolds.fa
+endif
+$(name)-stats:
+	abyss-fac $(FAC_OPTIONS) $^ |tee $@
+
+# Create an AGP file and FASTA file of scaftigs from scaffolds
+
+%.agp %-agp.fa: %.fa
+	abyss-fatoagp $(FATOAGP_OPTIONS) -f $*-agp.fa $< >$*.agp
+
+# Align the contigs to the reference
+
+%-$(ref).sam.gz: %.fa
+	bwa bwasw $(bwaswopt) $(BWASW_OPTIONS) $($(ref)) $< |gzip >$@
+
+# Find breakpoints in the alignments
+
+%.break: %.sam.gz
+	abyss-samtobreak $(SAMTOBREAK_OPTIONS) $< >$@
