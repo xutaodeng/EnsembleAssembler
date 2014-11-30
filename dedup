@@ -8,48 +8,9 @@ import gzip
 import linecache
 import gc
 from operator import itemgetter
-import sqlite3
 
 count=0
 total=0
-
-# def RestoreOrderDB(tmpfq, outfq):
-	# try: os.remove(tmpfq+'.db')
-	# except: pass
-	# #conn = sqlite3.connect(tmpfq+'.db')
-	# conn = sqlite3.connect(":memory:")
-	# c = conn.cursor()
-
-	# # Create table
-	# c.execute('''CREATE TABLE ordertable 
-               # (lineNo integer, ind integer)''')
-
-	# # c.execute('''CREATE TABLE stocks
-             # # (date text, trans text, symbol text, qty real, price real)''')
-			 
-	# f=open(tmpfq, 'r')
-	# i=0
-	# for line in f:
-		# if i%1000000==0: print i
-		# i+=1
-		# lineNo = int(line.strip().split()[0])
-		# c.execute("INSERT INTO ordertable VALUES ("+str(lineNo)+","+str(i)+")")
-	# f.close()
-	# conn.commit()
-
-	# of=open(outfq, 'w')
-	# j=0
-	# for row in c.execute('SELECT * FROM ordertable ORDER BY lineNo'):
-		# lineNo, i = row[0], row[1]
-		# if j%1000000==0: print 'j',j
-		# j+=1
-		# line = linecache.getline(tmpfq, i)
-		# Number, content = line.strip().split()
-		# of.write(content+'\n')
-	# of.close()
-
-	# conn.close()
-
 def RestoreOrder(tmpfq, outfq):
 	f=open(tmpfq, 'r')
 	order = []
