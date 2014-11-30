@@ -259,7 +259,10 @@ if __name__ == "__main__":
 	abysspath=dirscr+'bin/abyss-pe'
 	cap3path=dirscr+'bin/cap3'
 
-	configfile = sys.argv[1]
+	try:
+		configfile = sys.argv[1]
+	except:
+		print 'usage: ensembleAssembly config.txt'
 	readConfig(configfile)
 	wd = os.path.dirname(os.path.abspath(sys.argv[1]))
 	#wd = os.path.abspath('.')
