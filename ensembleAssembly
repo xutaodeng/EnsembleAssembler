@@ -251,6 +251,7 @@ def AddPipe(para, sf):
 
 if __name__ == "__main__":
 	dirscr = os.path.dirname(os.path.abspath(sys.argv[0]))+'/'
+	print dirscr 
 	soappath=dirscr+'bin/SOAPdenovo-63mer' #default program path
 	velvetg=dirscr+'bin/velvetg'
 	velveth=dirscr+'bin/velveth'
